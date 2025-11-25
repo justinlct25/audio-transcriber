@@ -1,18 +1,10 @@
-import glob
 import os
 from transcriber import transcribe_audio
+from utils import get_untranscribed_files
 
 # --- Configuration ---
-# 1. AUDIO FILE PATH
-# Find the first MP3 file in the audio directory
-audio_files = glob.glob("audio/*.mp3")
-if audio_files:
-    AUDIO_FILE_PATH = audio_files[0]
-    print(f"Found audio file: {AUDIO_FILE_PATH}")
-else:
-    print("No MP3 files found in audio/ directory")
-    print("Please add an audio file to the audio/ directory")
-    exit(1)
+# 1. AUDIO DIRECTORY
+AUDIO_DIR = "audio"
 
 # 2. MODEL SIZE
 #    - "large-v3": Most accurate, uses the most memory (best for 8GB+ VRAM/RAM)
@@ -31,8 +23,6 @@ DEVICE = "cpu"
 COMPUTE_TYPE = "float16" if DEVICE == "cuda" else "int8"
 
 # 5. OUTPUT DIRECTORY
-# Set to None to save in the same directory as the audio file
-# Or specify a path like "output/transcript" to organize outputs
 OUTPUT_DIR = "output/transcript"
 
 # 6. PAUSE THRESHOLD
@@ -47,17 +37,56 @@ if __name__ == "__main__":
     print("Audio Transcriber")
     print("="*50)
     
-    # Transcribe the audio file
-    output_file = transcribe_audio(
-        audio_path=AUDIO_FILE_PATH,
-        model_size=MODEL_SIZE,
-        device=DEVICE,
-        compute_type=COMPUTE_TYPE,
-        output_dir=OUTPUT_DIR,
-        pause_threshold=PAUSE_THRESHOLD
-    )
+    # Find untranscribed audio files
+    untranscribed_files = get_untranscribed_files(AUDIO_DIR, OUTPUT_DIR)
     
-    if output_file:
-        print(f"\n✓ Success! Transcript saved to: {output_file}")
-    else:
-        print("\n✗ Transcription failed")
+    if not untranscribed_files:
+        print("\n✓ All audio files have been transcribed!")
+        print(f"Check {OUTPUT_DIR} for transcripts.")
+        exit(0)
+    
+    print(f"\nFound {len(untranscribed_files)} audio file(s) to transcribe:")
+    for i, audio_path in enumerate(untranscribed_files, 1):
+        print(f"  {i}. {os.path.basename(audio_path)}")
+    print()
+    
+    # Transcribe each file
+    success_count = 0
+    failed_files = []
+    
+    for i, audio_path in enumerate(untranscribed_files, 1):
+        print("="*50)
+        print(f"Transcribing file {i}/{len(untranscribed_files)}")
+        print(f"File: {os.path.basename(audio_path)}")
+        print("="*50)
+        
+        output_file = transcribe_audio(
+            audio_path=audio_path,
+            model_size=MODEL_SIZE,
+            device=DEVICE,
+            compute_type=COMPUTE_TYPE,
+            output_dir=OUTPUT_DIR,
+            pause_threshold=PAUSE_THRESHOLD
+        )
+        
+        if output_file:
+            success_count += 1
+            print(f"\n✓ Transcript saved to: {output_file}\n")
+        else:
+            failed_files.append(audio_path)
+            print(f"\n✗ Failed to transcribe: {audio_path}\n")
+    
+    # Summary
+    print("="*50)
+    print("Transcription Summary")
+    print("="*50)
+    print(f"Total files processed: {len(untranscribed_files)}")
+    print(f"Successfully transcribed: {success_count}")
+    print(f"Failed: {len(failed_files)}")
+    
+    if failed_files:
+        print("\nFailed files:")
+        for f in failed_files:
+            print(f"  - {os.path.basename(f)}")
+    
+    print("\n✓ All done!")

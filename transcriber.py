@@ -17,7 +17,6 @@ def create_output_file(audio_path, output_dir):
     
     # Create the file with a header
     with open(output_filename, "w", encoding="utf-8") as f:
-        f.write(f"Transcription in progress...\n")
         f.write(f"Audio file: {audio_path}\n")
         f.write(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("="*50 + "\n\n")
@@ -65,17 +64,35 @@ def check_should_end_paragraph(current_segment, previous_segment, pause_threshol
     return False
 
 
-def write_paragraph(paragraph_segments, file_handle):
-    """Write a paragraph composed of multiple segments to the already-open file."""
+def remove_in_progress_marker(filename):
+    """Remove the 'Transcription in progress...' marker from the end of the file."""
+    with open(filename, "r", encoding="utf-8") as f:
+        content = f.read()
+    
+    # Remove the progress marker if it exists
+    if content.endswith("Transcription in progress...\n"):
+        content = content[:-len("Transcription in progress...\n")]
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(content)
+
+
+def write_paragraph(paragraph_segments, filename):
+    """Write a paragraph and add the 'in progress' marker."""
     if not paragraph_segments:
         return
+    
+    # Remove old progress marker
+    remove_in_progress_marker(filename)
     
     paragraph_start = paragraph_segments[0]['start']
     paragraph_end = paragraph_segments[-1]['end']
     paragraph_text = " ".join(seg['text'] for seg in paragraph_segments)
     
-    file_handle.write(f"[{paragraph_start:.2f}s -> {paragraph_end:.2f}s] {paragraph_text}\n\n")
-    file_handle.flush()
+    # Write paragraph and add progress marker
+    with open(filename, "a", encoding="utf-8") as f:
+        f.write(f"[{paragraph_start:.2f}s -> {paragraph_end:.2f}s] {paragraph_text}\n\n")
+        f.write("Transcription in progress...\n")
+        f.flush()
 
 
 def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_type="int8", 
@@ -140,9 +157,6 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
     else:
         pbar = tqdm(desc="Transcribing", unit=" segments")
     
-    # Open file for writing
-    output_file = open(output_filename, "a", encoding="utf-8")
-    
     for segment in segments_iter:
         segment_data = {
             'start': segment.start,
@@ -168,7 +182,7 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
         
         # Write paragraph if it's complete
         if should_end_paragraph and current_paragraph:
-            write_paragraph(current_paragraph, output_file)
+            write_paragraph(current_paragraph, output_filename)
             paragraph_count += 1
             current_paragraph = []  # Start new empty paragraph
     
@@ -176,10 +190,18 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
     
     # Write the last paragraph if it exists
     if current_paragraph:
-        write_paragraph(current_paragraph, output_file)
+        remove_in_progress_marker(output_filename)
+        paragraph_start = current_paragraph[0]['start']
+        paragraph_end = current_paragraph[-1]['end']
+        paragraph_text = " ".join(seg['text'] for seg in current_paragraph)
+        
+        with open(output_filename, "a", encoding="utf-8") as f:
+            f.write(f"[{paragraph_start:.2f}s -> {paragraph_end:.2f}s] {paragraph_text}\n\n")
+        
         paragraph_count += 1
-    
-    output_file.close()
+    else:
+        # Remove progress marker if no final paragraph
+        remove_in_progress_marker(output_filename)
 
     end_time = time.time()
     elapsed_time = end_time - start_time
