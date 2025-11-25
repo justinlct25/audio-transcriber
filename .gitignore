@@ -22,9 +22,13 @@ audio/*.txt
 output/diarization/*
 output/transcript/*
 
+# Temporary files
+temp/*
+
 # Keep folder structure
 !output/diarization/.gitkeep
 !output/transcript/.gitkeep
+!temp/.gitkeep
 
 # IDE
 .vscode/

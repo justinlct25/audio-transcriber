@@ -3,38 +3,6 @@ import time
 from faster_whisper import WhisperModel
 from tqdm import tqdm
 
-import glob
-
-# --- Configuration ---
-# 1. SET YOUR AUDIO FILE PATH:
-# Find the first MP3 file in the audio directory
-audio_files = glob.glob("audio/*.mp3")
-if audio_files:
-    AUDIO_FILE_PATH = audio_files[0]
-    print(f"Found audio file: {AUDIO_FILE_PATH}")
-else:
-    AUDIO_FILE_PATH = "audio/your_file.mp3"
-
-# 2. CHOOSE YOUR MODEL:
-#    - "large-v3": Most accurate, uses the most memory (best for 8GB+ VRAM/RAM).
-#    - "medium.en": Great balance of speed/accuracy for English-only audio.
-#    - "base.en": Fastest, lowest memory usage, but less accurate.
-MODEL_SIZE = "medium.en"
-
-# 3. CONFIGURE HARDWARE:
-#    - device="cuda": Use this if you have an NVIDIA GPU (requires CUDA installation).
-#    - device="cpu": Use this if you do NOT have a dedicated GPU.
-DEVICE = "cpu"  # Changed to CPU for Mac
-
-# 4. CONFIGURE COMPUTE TYPE (for speed/memory trade-off):
-#    - For GPU (cuda): "float16" (standard) or "int8" (less VRAM, slightly faster).
-#    - For CPU (cpu): "int8" is highly recommended for speed and memory efficiency.
-COMPUTE_TYPE = "float16" 
-
-# Adjustments for CPU only:
-if DEVICE == "cpu":
-    COMPUTE_TYPE = "int8"
-
 
 def get_audio_duration(audio_path):
     """Get audio duration in seconds (approximate from file info)."""
@@ -53,29 +21,46 @@ def get_audio_duration(audio_path):
         return None
 
 
-def transcribe_audio(audio_path, model_size, device, compute_type):
-    """Loads the model and performs the transcription with progress bar."""
+def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_type="int8", output_dir=None):
+    """
+    Transcribe audio file to text with timestamps.
+    
+    Args:
+        audio_path (str): Path to the audio file
+        model_size (str): Whisper model size (large-v3, medium.en, base.en, etc.)
+        device (str): Device to use (cuda or cpu)
+        compute_type (str): Compute type (float16, int8, etc.)
+        output_dir (str): Optional output directory. If None, uses same dir as audio file
+    
+    Returns:
+        str: Path to the output transcript file, or None if failed
+    """
     
     if not os.path.exists(audio_path):
-        print(f"Error: Audio file not found at '{audio_path}'. Please check the AUDIO_FILE_PATH.")
-        return
+        print(f"Error: Audio file not found at '{audio_path}'")
+        return None
 
     print(f"Device: {device.upper()} | Compute Type: {compute_type}")
     print(f"Loading Whisper model '{model_size}'...")
     
-    # Load the model. It downloads automatically on first run.
+    # Load the model
     try:
         model = WhisperModel(model_size, device=device, compute_type=compute_type)
     except Exception as e:
         print(f"Error loading model: {e}")
-        print("Ensure you have the required dependencies (like PyTorch and CUDA for GPU) installed correctly.")
-        return
+        print("Ensure you have the required dependencies installed correctly.")
+        return None
 
     print("Model loaded successfully. Starting transcription...")
     
-    # Prepare output file name and create it immediately
-    base_name = os.path.splitext(audio_path)[0]
-    output_filename = f"{base_name}_transcript.txt"
+    # Prepare output file name
+    base_name = os.path.splitext(os.path.basename(audio_path))[0]
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        output_filename = os.path.join(output_dir, f"{base_name}_transcript.txt")
+    else:
+        audio_dir = os.path.dirname(audio_path)
+        output_filename = os.path.join(audio_dir, f"{base_name}_transcript.txt")
     
     # Create the file with a header
     with open(output_filename, "w", encoding="utf-8") as f:
@@ -91,11 +76,11 @@ def transcribe_audio(audio_path, model_size, device, compute_type):
     
     start_time = time.time()
 
-    # The transcribe method automatically handles long audio by chunking it.
+    # Transcribe the audio
     segments, info = model.transcribe(
         audio_path,
-        beam_size=5,             # Controls search width for better accuracy
-        vad_filter=True          # Recommended: removes silence/noise chunks
+        beam_size=5,
+        vad_filter=True
     )
 
     # Process segments with progress bar and write in real-time
@@ -140,7 +125,5 @@ def transcribe_audio(audio_path, model_size, device, compute_type):
     print(f"Total time taken: {elapsed_time:.2f} seconds.")
     print(f"Transcript saved to: {output_filename}")
     print("-" * 50)
-
-
-if __name__ == "__main__":
-    transcribe_audio(AUDIO_FILE_PATH, MODEL_SIZE, DEVICE, COMPUTE_TYPE)
+    
+    return output_filename
