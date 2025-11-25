@@ -30,10 +30,16 @@ DEVICE = "cpu"
 #    - For CPU (cpu): "int8" is highly recommended for speed and memory efficiency
 COMPUTE_TYPE = "float16" if DEVICE == "cuda" else "int8"
 
-# 5. OUTPUT DIRECTORY (optional)
+# 5. OUTPUT DIRECTORY
 # Set to None to save in the same directory as the audio file
-# Or specify a path like "output/transcript"
+# Or specify a path like "output/transcript" to organize outputs
 OUTPUT_DIR = "output/transcript"
+
+# 6. PAUSE THRESHOLD
+# Minimum pause (in seconds) to create a new paragraph after a sentence ends
+# Lower = more paragraphs, Higher = fewer, longer paragraphs
+# Default: 1.5 seconds
+PAUSE_THRESHOLD = 1.5
 
 
 if __name__ == "__main__":
@@ -47,7 +53,8 @@ if __name__ == "__main__":
         model_size=MODEL_SIZE,
         device=DEVICE,
         compute_type=COMPUTE_TYPE,
-        output_dir=OUTPUT_DIR
+        output_dir=OUTPUT_DIR,
+        pause_threshold=PAUSE_THRESHOLD
     )
     
     if output_file:

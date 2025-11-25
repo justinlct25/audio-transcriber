@@ -2,6 +2,7 @@ import os
 import time
 from faster_whisper import WhisperModel
 from tqdm import tqdm
+import re
 
 
 def get_audio_duration(audio_path):
@@ -21,9 +22,17 @@ def get_audio_duration(audio_path):
         return None
 
 
-def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_type="int8", output_dir=None):
+def ends_with_sentence_terminator(text):
+    """Check if text ends with sentence-ending punctuation."""
+    # Strip whitespace and check last character
+    text = text.strip()
+    return len(text) > 0 and text[-1] in '.!?'
+
+
+def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_type="int8", 
+                     output_dir=None, pause_threshold=1.5):
     """
-    Transcribe audio file to text with timestamps.
+    Transcribe audio file to text grouped into natural paragraphs/sessions.
     
     Args:
         audio_path (str): Path to the audio file
@@ -31,6 +40,7 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
         device (str): Device to use (cuda or cpu)
         compute_type (str): Compute type (float16, int8, etc.)
         output_dir (str): Optional output directory. If None, uses same dir as audio file
+        pause_threshold (float): Minimum pause (seconds) between sentences to start new paragraph
     
     Returns:
         str: Path to the output transcript file, or None if failed
@@ -77,14 +87,17 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
     start_time = time.time()
 
     # Transcribe the audio
-    segments, info = model.transcribe(
+    segments_iter, info = model.transcribe(
         audio_path,
         beam_size=5,
         vad_filter=True
     )
 
     # Process segments with progress bar and write in real-time
-    full_transcript = []
+    all_segments = []
+    current_paragraph = []
+    paragraph_count = 0
+    previous_segment = None
     
     # Create progress bar
     if duration:
@@ -93,28 +106,72 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
     else:
         pbar = tqdm(desc="Transcribing", unit=" segments")
     
-    # Open file in append mode to keep writing as we transcribe
-    with open(output_filename, "a", encoding="utf-8") as f:
-        for segment in segments:
-            # Write segment with timestamps immediately
-            line = f"[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text.strip()}"
-            f.write(line + "\n")
-            f.flush()  # Force write to disk immediately
-            full_transcript.append(segment.text)
+    # Open file for writing
+    output_file = open(output_filename, "a", encoding="utf-8")
+    
+    for segment in segments_iter:
+        segment_data = {
+            'start': segment.start,
+            'end': segment.end,
+            'text': segment.text.strip()
+        }
+        all_segments.append(segment_data)
+        
+        # Add to current paragraph
+        current_paragraph.append(segment_data)
+        
+        # Check if we should end the current paragraph
+        should_end_paragraph = False
+        
+        # Check for sentence ending + pause
+        if ends_with_sentence_terminator(segment_data['text']):
+            # If this is a sentence ending, check if there's a pause after it
+            # We'll end the paragraph on sentence endings with significant pauses
+            should_end_paragraph = True
+        
+        # Also check for large pauses (paragraph breaks)
+        if previous_segment is not None:
+            pause = segment_data['start'] - previous_segment['end']
+            if pause >= pause_threshold:
+                should_end_paragraph = True
+        
+        previous_segment = segment_data
+        
+        # Update progress bar
+        if duration:
+            pbar.n = segment.end
+            pbar.refresh()
+        else:
+            pbar.update(1)
+        
+        # Write paragraph if it's complete
+        if should_end_paragraph and current_paragraph:
+            # Get start time from first segment and end time from last segment
+            paragraph_start = current_paragraph[0]['start']
+            paragraph_end = current_paragraph[-1]['end']
             
-            # Update progress bar
-            if duration:
-                pbar.n = segment.end
-                pbar.refresh()
-            else:
-                pbar.update(1)
-        
-        pbar.close()
-        
-        # Write the full, clean text version at the end of the file
-        f.write("\n\n" + "="*50 + "\n\n")
-        f.write("Full Plain Text Transcript:\n")
-        f.write("".join(full_transcript).strip())
+            # Combine all text in the paragraph
+            paragraph_text = " ".join(seg['text'] for seg in current_paragraph)
+            
+            # Write with timestamp
+            output_file.write(f"[{paragraph_start:.2f}s -> {paragraph_end:.2f}s] {paragraph_text}\n\n")
+            output_file.flush()
+            
+            paragraph_count += 1
+            current_paragraph = []  # Start new empty paragraph
+    
+    pbar.close()
+    
+    # Write the last paragraph if it exists
+    if current_paragraph:
+        paragraph_start = current_paragraph[0]['start']
+        paragraph_end = current_paragraph[-1]['end']
+        paragraph_text = " ".join(seg['text'] for seg in current_paragraph)
+        output_file.write(f"[{paragraph_start:.2f}s -> {paragraph_end:.2f}s] {paragraph_text}\n\n")
+        output_file.flush()
+        paragraph_count += 1
+    
+    output_file.close()
 
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -122,6 +179,8 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
     print("-" * 50)
     print("Transcription Complete!")
     print(f"Detected Language: {info.language} (Probability: {info.language_probability:.2f})")
+    print(f"Total segments: {len(all_segments)}")
+    print(f"Total paragraphs: {paragraph_count}")
     print(f"Total time taken: {elapsed_time:.2f} seconds.")
     print(f"Transcript saved to: {output_filename}")
     print("-" * 50)
