@@ -5,6 +5,27 @@ from tqdm import tqdm
 import re
 
 
+def create_output_file(audio_path, output_dir):
+    """Create and return the output transcript file path."""
+    base_name = os.path.splitext(os.path.basename(audio_path))[0]
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        output_filename = os.path.join(output_dir, f"{base_name}_transcript.txt")
+    else:
+        audio_dir = os.path.dirname(audio_path)
+        output_filename = os.path.join(audio_dir, f"{base_name}_transcript.txt")
+    
+    # Create the file with a header
+    with open(output_filename, "w", encoding="utf-8") as f:
+        f.write(f"Transcription in progress...\n")
+        f.write(f"Audio file: {audio_path}\n")
+        f.write(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("="*50 + "\n\n")
+    
+    print(f"Output file created: {output_filename}")
+    return output_filename
+
+
 def get_audio_duration(audio_path):
     """Get audio duration in seconds (approximate from file info)."""
     try:
@@ -27,6 +48,34 @@ def ends_with_sentence_terminator(text):
     # Strip whitespace and check last character
     text = text.strip()
     return len(text) > 0 and text[-1] in '.!?'
+
+
+def check_should_end_paragraph(current_segment, previous_segment, pause_threshold):
+    """Determine if the current paragraph should end based on sentence terminator and pause."""
+    # Check for sentence ending
+    if ends_with_sentence_terminator(current_segment['text']):
+        return True
+    
+    # Check for pause threshold
+    if previous_segment is not None:
+        pause = current_segment['start'] - previous_segment['end']
+        if pause >= pause_threshold:
+            return True
+    
+    return False
+
+
+def write_paragraph(paragraph_segments, file_handle):
+    """Write a paragraph composed of multiple segments to the already-open file."""
+    if not paragraph_segments:
+        return
+    
+    paragraph_start = paragraph_segments[0]['start']
+    paragraph_end = paragraph_segments[-1]['end']
+    paragraph_text = " ".join(seg['text'] for seg in paragraph_segments)
+    
+    file_handle.write(f"[{paragraph_start:.2f}s -> {paragraph_end:.2f}s] {paragraph_text}\n\n")
+    file_handle.flush()
 
 
 def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_type="int8", 
@@ -63,23 +112,8 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
 
     print("Model loaded successfully. Starting transcription...")
     
-    # Prepare output file name
-    base_name = os.path.splitext(os.path.basename(audio_path))[0]
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-        output_filename = os.path.join(output_dir, f"{base_name}_transcript.txt")
-    else:
-        audio_dir = os.path.dirname(audio_path)
-        output_filename = os.path.join(audio_dir, f"{base_name}_transcript.txt")
-    
-    # Create the file with a header
-    with open(output_filename, "w", encoding="utf-8") as f:
-        f.write(f"Transcription in progress...\n")
-        f.write(f"Audio file: {audio_path}\n")
-        f.write(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write("="*50 + "\n\n")
-    
-    print(f"Output file created: {output_filename}")
+    # Create output file
+    output_filename = create_output_file(audio_path, output_dir)
     
     # Try to get audio duration for progress bar
     duration = get_audio_duration(audio_path)
@@ -121,19 +155,7 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
         current_paragraph.append(segment_data)
         
         # Check if we should end the current paragraph
-        should_end_paragraph = False
-        
-        # Check for sentence ending + pause
-        if ends_with_sentence_terminator(segment_data['text']):
-            # If this is a sentence ending, check if there's a pause after it
-            # We'll end the paragraph on sentence endings with significant pauses
-            should_end_paragraph = True
-        
-        # Also check for large pauses (paragraph breaks)
-        if previous_segment is not None:
-            pause = segment_data['start'] - previous_segment['end']
-            if pause >= pause_threshold:
-                should_end_paragraph = True
+        should_end_paragraph = check_should_end_paragraph(segment_data, previous_segment, pause_threshold)
         
         previous_segment = segment_data
         
@@ -146,17 +168,7 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
         
         # Write paragraph if it's complete
         if should_end_paragraph and current_paragraph:
-            # Get start time from first segment and end time from last segment
-            paragraph_start = current_paragraph[0]['start']
-            paragraph_end = current_paragraph[-1]['end']
-            
-            # Combine all text in the paragraph
-            paragraph_text = " ".join(seg['text'] for seg in current_paragraph)
-            
-            # Write with timestamp
-            output_file.write(f"[{paragraph_start:.2f}s -> {paragraph_end:.2f}s] {paragraph_text}\n\n")
-            output_file.flush()
-            
+            write_paragraph(current_paragraph, output_file)
             paragraph_count += 1
             current_paragraph = []  # Start new empty paragraph
     
@@ -164,11 +176,7 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
     
     # Write the last paragraph if it exists
     if current_paragraph:
-        paragraph_start = current_paragraph[0]['start']
-        paragraph_end = current_paragraph[-1]['end']
-        paragraph_text = " ".join(seg['text'] for seg in current_paragraph)
-        output_file.write(f"[{paragraph_start:.2f}s -> {paragraph_end:.2f}s] {paragraph_text}\n\n")
-        output_file.flush()
+        write_paragraph(current_paragraph, output_file)
         paragraph_count += 1
     
     output_file.close()
