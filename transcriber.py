@@ -1,8 +1,24 @@
 import os
 import time
+import sys
 from faster_whisper import WhisperModel
 from tqdm import tqdm
 import re
+
+
+def should_fallback_to_cpu(error):
+    """Return True when the error suggests missing CUDA runtime libraries."""
+    msg = str(error).lower()
+    cuda_indicators = [
+        "cublas",
+        "cudnn",
+        "cuda",
+        "cudart",
+        "library",
+        "cannot be loaded",
+        "not found",
+    ]
+    return any(token in msg for token in cuda_indicators)
 
 
 def create_output_file(audio_path, output_dir):
@@ -123,6 +139,16 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
     try:
         model = WhisperModel(model_size, device=device, compute_type=compute_type)
     except Exception as e:
+        if device == "cuda" and should_fallback_to_cpu(e):
+            print("CUDA runtime not available. Falling back to CPU (int8).")
+            return transcribe_audio(
+                audio_path=audio_path,
+                model_size=model_size,
+                device="cpu",
+                compute_type="int8",
+                output_dir=output_dir,
+                pause_threshold=pause_threshold,
+            )
         print(f"Error loading model: {e}")
         print("Ensure you have the required dependencies installed correctly.")
         return None
@@ -132,17 +158,36 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
     # Create output file
     output_filename = create_output_file(audio_path, output_dir)
     
-    # Try to get audio duration for progress bar
+    # Try to get audio duration for progress bar (ffprobe first, then model metadata)
     duration = get_audio_duration(audio_path)
     
     start_time = time.time()
 
     # Transcribe the audio
-    segments_iter, info = model.transcribe(
-        audio_path,
-        beam_size=5,
-        vad_filter=True
-    )
+    try:
+        segments_iter, info = model.transcribe(
+            audio_path,
+            beam_size=5,
+            vad_filter=True
+        )
+    except Exception as e:
+        if device == "cuda" and should_fallback_to_cpu(e):
+            print("CUDA runtime failed during transcription. Falling back to CPU (int8).")
+            if os.path.exists(output_filename):
+                os.remove(output_filename)
+            return transcribe_audio(
+                audio_path=audio_path,
+                model_size=model_size,
+                device="cpu",
+                compute_type="int8",
+                output_dir=output_dir,
+                pause_threshold=pause_threshold,
+            )
+        print(f"Error during transcription setup: {e}")
+        return None
+
+    if duration is None:
+        duration = getattr(info, "duration", None)
 
     # Process segments with progress bar and write in real-time
     all_segments = []
@@ -152,39 +197,71 @@ def transcribe_audio(audio_path, model_size="medium.en", device="cpu", compute_t
     
     # Create progress bar
     if duration:
-        pbar = tqdm(total=duration, desc="Transcribing", unit="s", 
-                   bar_format='{l_bar}{bar}| {n:.1f}/{total:.1f}s [{elapsed}<{remaining}]')
+        pbar = tqdm(
+            total=duration,
+            desc="Transcribing",
+            unit="s",
+            dynamic_ncols=True,
+            mininterval=0.2,
+            leave=True,
+            file=sys.stdout,
+            bar_format='{l_bar}{bar}| {n:.1f}/{total:.1f}s [{elapsed}<{remaining}]'
+        )
     else:
-        pbar = tqdm(desc="Transcribing", unit=" segments")
+        pbar = tqdm(
+            desc="Transcribing",
+            unit="segments",
+            dynamic_ncols=True,
+            mininterval=0.2,
+            leave=True,
+            file=sys.stdout
+        )
     
-    for segment in segments_iter:
-        segment_data = {
-            'start': segment.start,
-            'end': segment.end,
-            'text': segment.text.strip()
-        }
-        all_segments.append(segment_data)
-        
-        # Add to current paragraph
-        current_paragraph.append(segment_data)
-        
-        # Check if we should end the current paragraph
-        should_end_paragraph = check_should_end_paragraph(segment_data, previous_segment, pause_threshold)
-        
-        previous_segment = segment_data
-        
-        # Update progress bar
-        if duration:
-            pbar.n = segment.end
-            pbar.refresh()
-        else:
-            pbar.update(1)
-        
-        # Write paragraph if it's complete
-        if should_end_paragraph and current_paragraph:
-            write_paragraph(current_paragraph, output_filename)
-            paragraph_count += 1
-            current_paragraph = []  # Start new empty paragraph
+    try:
+        for segment in segments_iter:
+            segment_data = {
+                'start': segment.start,
+                'end': segment.end,
+                'text': segment.text.strip()
+            }
+            all_segments.append(segment_data)
+            
+            # Add to current paragraph
+            current_paragraph.append(segment_data)
+            
+            # Check if we should end the current paragraph
+            should_end_paragraph = check_should_end_paragraph(segment_data, previous_segment, pause_threshold)
+            
+            previous_segment = segment_data
+            
+            # Update progress bar
+            if duration:
+                pbar.n = segment.end
+                pbar.refresh()
+            else:
+                pbar.update(1)
+            
+            # Write paragraph if it's complete
+            if should_end_paragraph and current_paragraph:
+                write_paragraph(current_paragraph, output_filename)
+                paragraph_count += 1
+                current_paragraph = []  # Start new empty paragraph
+    except Exception as e:
+        pbar.close()
+        if device == "cuda" and should_fallback_to_cpu(e):
+            print("CUDA runtime failed during decoding. Falling back to CPU (int8).")
+            if os.path.exists(output_filename):
+                os.remove(output_filename)
+            return transcribe_audio(
+                audio_path=audio_path,
+                model_size=model_size,
+                device="cpu",
+                compute_type="int8",
+                output_dir=output_dir,
+                pause_threshold=pause_threshold,
+            )
+        print(f"Error during transcription: {e}")
+        return None
     
     pbar.close()
     

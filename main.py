@@ -15,7 +15,7 @@ MODEL_SIZE = "medium.en"
 # 3. DEVICE
 #    - "cuda": Use this if you have an NVIDIA GPU (requires CUDA installation)
 #    - "cpu": Use this if you do NOT have a dedicated GPU
-DEVICE = "cpu"
+DEVICE = "cuda"
 
 # 4. COMPUTE TYPE
 #    - For GPU (cuda): "float16" (standard) or "int8" (less VRAM, slightly faster)
